@@ -107,10 +107,8 @@ impl HostInventory for PluginHostState {
             }
             InventoryProvider::PlayerMain(player) => {
                 if slot < 36 {
-                    player.inventory().set_stack(slot as usize, stack.clone());
-                    let stack_serializer = ItemStackSerializer::from(stack);
-                    let packet = CSetContainerSlot::new(0, 0, slot as i16, &stack_serializer);
-                    player.send_client_packet(&packet).await;
+                    player.inventory().set_stack(slot as usize, stack);
+                    player.sync_inventory_to_client();
                 }
             }
             InventoryProvider::PlayerEnderChest(player) => {
@@ -142,11 +140,7 @@ impl HostInventory for PluginHostState {
                         slot as usize,
                         pumpkin_data::item_stack::ItemStack::EMPTY.clone(),
                     );
-                    let empty_serializer = ItemStackSerializer::from(
-                        pumpkin_data::item_stack::ItemStack::EMPTY.clone(),
-                    );
-                    let packet = CSetContainerSlot::new(0, 0, slot as i16, &empty_serializer);
-                    player.send_client_packet(&packet).await;
+                    player.sync_inventory_to_client();
                     if s.is_empty() { None } else { Some(s) }
                 } else {
                     None
@@ -184,12 +178,8 @@ impl HostInventory for PluginHostState {
                     player
                         .inventory()
                         .set_stack(slot, pumpkin_data::item_stack::ItemStack::EMPTY.clone());
-                    let empty_serializer = ItemStackSerializer::from(
-                        pumpkin_data::item_stack::ItemStack::EMPTY.clone(),
-                    );
-                    let packet = CSetContainerSlot::new(0, 0, slot as i16, &empty_serializer);
-                    player.send_client_packet(&packet).await;
                 }
+                player.sync_inventory_to_client();
             }
             InventoryProvider::PlayerEnderChest(player) => {
                 player.ender_chest_inventory().clear();
@@ -323,12 +313,8 @@ impl HostPlayerInventory for PluginHostState {
             pumpkin_util::Hand::Left => PlayerInventory::OFF_HAND_SLOT,
         };
 
-        player.inventory().set_stack(slot, stack.clone());
-
-        // Sync to client
-        let stack_serializer = ItemStackSerializer::from(stack);
-        let packet = CSetContainerSlot::new(0, 0, slot as i16, &stack_serializer);
-        player.send_client_packet(&packet).await;
+        player.inventory().set_stack(slot, stack);
+        player.sync_inventory_to_client();
 
         Ok(())
     }
