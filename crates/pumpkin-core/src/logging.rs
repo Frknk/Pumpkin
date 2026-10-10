@@ -451,6 +451,9 @@ impl Completer for PumpkinCommandCompleter {
         pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        // rustyline calls this on its own thread, but suggestion providers (Wasm plugins
+        // included) may need the server's Tokio runtime.
+        let _rt = self.rt.get().map(tokio::runtime::Handle::enter);
         let cmd_to_cursor = &line[..pos];
         let has_slash = cmd_to_cursor.starts_with('/');
         let cmd = if has_slash {
