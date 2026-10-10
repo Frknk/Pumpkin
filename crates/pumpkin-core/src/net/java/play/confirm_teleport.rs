@@ -5,7 +5,7 @@ impl JavaClient {
     pub fn handle_confirm_teleport(&self, player: &Player, confirm_teleport: &SConfirmTeleport) {
         enum TeleportResult {
             Success,
-            WrongId,
+            Outdated,
             NotTeleporting,
         }
 
@@ -14,26 +14,22 @@ impl JavaClient {
                 .awaiting_teleport
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some((id, position)) = awaiting_teleport.as_ref() {
-                if id == &confirm_teleport.teleport_id {
-                    // We should set the position now to what we requested in the teleport packet.
-                    // This may fix issues when the client sends the position while being teleported.
-                    player.get_entity().set_pos(*position);
-                    *awaiting_teleport = None;
-                    TeleportResult::Success
-                } else {
-                    TeleportResult::WrongId
-                }
+            // Like vanilla's handleAcceptTeleportPacket, only the latest teleport counts: the
+            // client still confirms one that a newer teleport replaced before it arrived.
+            if confirm_teleport.teleport_id.0 != player.teleport_id_count.load(Ordering::Relaxed) {
+                TeleportResult::Outdated
+            } else if let Some((_, position)) = awaiting_teleport.take() {
+                // We should set the position now to what we requested in the teleport packet.
+                // This may fix issues when the client sends the position while being teleported.
+                player.get_entity().set_pos(position);
+                TeleportResult::Success
             } else {
                 TeleportResult::NotTeleporting
             }
         };
 
         match result {
-            TeleportResult::Success => {}
-            TeleportResult::WrongId => {
-                self.try_kick(&TextComponent::text("Wrong teleport id"));
-            }
+            TeleportResult::Success | TeleportResult::Outdated => {}
             TeleportResult::NotTeleporting => {
                 self.try_kick(&TextComponent::text(
                     "Send Teleport confirm, but we did not teleport",
