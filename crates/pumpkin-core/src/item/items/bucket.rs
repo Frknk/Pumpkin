@@ -218,7 +218,12 @@ pub(crate) fn play_bucket_evaporation(world: &Arc<World>, position: &Vector3<f64
     );
 }
 
-fn try_place_powder_snow(world: &Arc<World>, pos: BlockPos, direction: BlockDirection) -> bool {
+fn try_place_powder_snow(
+    world: &Arc<World>,
+    pos: BlockPos,
+    direction: BlockDirection,
+    allow: impl FnOnce() -> bool,
+) -> bool {
     let state = world.get_block_state(&pos);
     let target_pos = if state.replaceable() {
         pos
@@ -229,6 +234,9 @@ fn try_place_powder_snow(world: &Arc<World>, pos: BlockPos, direction: BlockDire
     if !target_state.is_air() && !target_state.is_liquid() && !target_state.replaceable() {
         return false;
     }
+    if !allow() {
+        return false;
+    }
     world.set_block_state(
         &target_pos,
         Block::POWDER_SNOW.default_state.id,
@@ -237,18 +245,24 @@ fn try_place_powder_snow(world: &Arc<World>, pos: BlockPos, direction: BlockDire
     true
 }
 
+/// Places the bucket's contents at `pos` or next to it. `allow` runs once the placement is known
+/// to succeed, right before the world changes, and can still refuse it.
 pub(crate) fn try_place_filled_bucket(
     world: &Arc<World>,
     item: &Item,
     pos: BlockPos,
     direction: BlockDirection,
+    allow: impl FnOnce() -> bool,
 ) -> bool {
     let (block, state) = world.get_block_and_state(&pos);
     if item.id == Item::POWDER_SNOW_BUCKET.id {
-        return try_place_powder_snow(world, pos, direction);
+        return try_place_powder_snow(world, pos, direction, allow);
     }
 
     if item.id == Item::WATER_BUCKET.id && block.is_waterlogged(state.id) {
+        if !allow() {
+            return false;
+        }
         let state_id = block.set_waterlogged(state.id, true).unwrap_or(state.id);
         world.set_block_state(&pos, state_id, BlockFlags::NOTIFY_ALL);
         world.schedule_fluid_tick(&Fluid::WATER, pos, 5, TickPriority::Normal);
@@ -259,7 +273,7 @@ pub(crate) fn try_place_filled_bucket(
     let (block, state) = world.get_block_and_state(&target_pos);
 
     if block.is_waterloggable() {
-        if item.id == Item::LAVA_BUCKET.id {
+        if item.id == Item::LAVA_BUCKET.id || !allow() {
             return false;
         }
         let state_id = block.set_waterlogged(state.id, true).unwrap_or(state.id);
@@ -269,6 +283,9 @@ pub(crate) fn try_place_filled_bucket(
     }
 
     if state.id == Block::AIR.default_state.id || state.is_liquid() {
+        if !allow() {
+            return false;
+        }
         world.set_block_state(
             &target_pos,
             if item.id == Item::LAVA_BUCKET.id {
@@ -397,13 +414,14 @@ impl ItemBehaviour for FilledBucketItem {
             play_bucket_evaporation(&world, &player.position());
             return;
         }
-        if !try_place_filled_bucket(&world, item, pos, direction) {
-            return;
-        }
-
-        if let Some(server) = world.server.upgrade()
-            && let Some(player_arc) = world.get_player_by_uuid(player.gameprofile.id)
-        {
+        let mut cancelled = false;
+        let allow = || {
+            let (Some(server), Some(player_arc)) = (
+                world.server.upgrade(),
+                world.get_player_by_uuid(player.gameprofile.id),
+            ) else {
+                return true;
+            };
             let mut event =
                 crate::plugin::api::events::player::player_bucket::PlayerBucketEmptyEvent::new(
                     player_arc,
@@ -411,6 +429,22 @@ impl ItemBehaviour for FilledBucketItem {
                     item.registry_key.to_string(),
                 );
             server.plugin_manager.fire_blocking(&server, &mut event);
+            cancelled = event.cancelled;
+            !cancelled
+        };
+        if !try_place_filled_bucket(&world, item, pos, direction, allow) {
+            if cancelled {
+                // The client already emptied its bucket, so send it the full bucket back.
+                player
+                    .current_screen_handler
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .sync_state();
+            }
+            return;
         }
 
         let place_pos = if world
