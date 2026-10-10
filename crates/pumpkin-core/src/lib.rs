@@ -591,6 +591,7 @@ impl PumpkinServer {
                             match login_result {
                                 PacketHandlerResult::Stop => {
                                      pending.close();
+                                     pending.shutdown();
                                 },
                                 PacketHandlerResult::ReadyToPlay(profile, config) => {
                                      let mut java_client = JavaClient::from_pending(pending, profile.clone(), config.clone());

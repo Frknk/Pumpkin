@@ -63,6 +63,33 @@ pub mod status;
 pub use chunk_data::{CChunkData, ChunkLightExt};
 use outgoing::{DISCONNECT_FLUSH_TIMEOUT, OutgoingPacket, run_outgoing_packet_writer};
 
+/// How long a closed connection keeps reading once its write half is gone.
+const DISCONNECT_LINGER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Reads and discards what the client still sends until it closes its side, or until
+/// `write_done` resolves and `DISCONNECT_LINGER` passes (`DISCONNECT_FLUSH_TIMEOUT` more at most).
+///
+/// Closing a socket with unread input makes the OS send an RST instead of a FIN, and an RST can
+/// wipe the disconnect packet from the client's buffer before it reads it. Holding the read half
+/// open keeps the socket alive, so dropping the write half only sends a FIN.
+async fn drain_until_closed(
+    mut network_reader: TCPNetworkDecoder<BufReader<OwnedReadHalf>>,
+    write_done: impl Future<Output = ()>,
+) {
+    let drain = async { while network_reader.get_raw_packet().await.is_ok() {} };
+    let deadline = async {
+        write_done.await;
+        tokio::time::sleep(DISCONNECT_LINGER).await;
+    };
+    let linger = async {
+        tokio::select! {
+            () = drain => {}
+            () = deadline => {}
+        }
+    };
+    let _ = tokio::time::timeout(DISCONNECT_FLUSH_TIMEOUT + DISCONNECT_LINGER, linger).await;
+}
+
 use arc_swap::ArcSwap;
 use pending::PendingConnection;
 
@@ -302,6 +329,13 @@ impl JavaClient {
                 }
             }
         }
+
+        // The writer may still be sending the disconnect, so keep the socket open past it.
+        let tasks = self.tasks.clone();
+        self.rt_handle
+            .spawn(drain_until_closed(network_reader, async move {
+                tasks.wait().await;
+            }));
     }
 
     pub async fn await_tasks(&self) {
@@ -1214,5 +1248,40 @@ impl JavaClient {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    #[tokio::test]
+    async fn close_with_unread_input_still_delivers_the_last_packet() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let (read, mut write) = server.into_split();
+
+        // Packets the server never gets to read (length 2, id 0, one byte).
+        client.write_all(&[2, 0, 0].repeat(1000)).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        write.write_all(b"disconnect").await.unwrap();
+        write.flush().await.unwrap();
+        drop(write);
+        tokio::spawn(drain_until_closed(
+            TCPNetworkDecoder::new(BufReader::new(read)),
+            std::future::ready(()),
+        ));
+
+        // An RST arriving first would discard this before the client reads it.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let mut received = Vec::new();
+        client.read_to_end(&mut received).await.unwrap();
+        assert_eq!(received, b"disconnect");
     }
 }

@@ -46,7 +46,7 @@ use crate::{
     server::Server,
 };
 
-use super::JavaClient;
+use super::{JavaClient, drain_until_closed};
 
 const BRAND_CHANNEL_PREFIX: &str = "minecraft:brand";
 
@@ -118,6 +118,18 @@ impl PendingConnection {
 
     pub fn close(&self) {
         self.close_token.cancel();
+    }
+
+    /// Closes the socket without dropping what was already sent; see [`drain_until_closed`].
+    pub fn shutdown(self) {
+        let Self {
+            network_writer,
+            network_reader,
+            ..
+        } = self;
+        // Everything sent was flushed, so this only sends a FIN.
+        drop(network_writer);
+        tokio::spawn(drain_until_closed(network_reader, std::future::ready(())));
     }
 
     pub fn is_closed(&self) -> bool {
