@@ -1105,6 +1105,8 @@ impl PluginManager {
         if let Some(instance) = plugin.instance.take() {
             instance.on_unload(plugin.context.clone()).await.ok();
         }
+        // Otherwise loading the plugin again fails on its first `register_permission`.
+        plugin.context.unregister_permissions();
 
         if plugin.loader.can_unload() {
             if let Some(data) = plugin.loader_data {

@@ -39,6 +39,8 @@ pub struct Context {
     pub plugin_manager: Arc<PluginManager>,
     pub permission_manager: Arc<PermissionManager>,
     pub logger: Arc<OnceLock<LoggerOption>>,
+    /// Permission nodes this plugin registered, removed again when it unloads.
+    permissions: std::sync::Mutex<Vec<String>>,
 }
 impl Context {
     /// Creates a new instance of `Context`.
@@ -66,6 +68,7 @@ impl Context {
             plugin_manager,
             permission_manager,
             logger,
+            permissions: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -248,6 +251,18 @@ impl Context {
         self.reload_commands_for_everyone();
     }
 
+    pub(crate) fn unregister_permissions(&self) {
+        let nodes = std::mem::take(
+            &mut *self
+                .permissions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for node in nodes {
+            self.permission_manager.unregister_permission(&node);
+        }
+    }
+
     /// Reloads (resends) all commands for all currently online players.
     pub fn reload_commands_for_everyone(&self) {
         for world in self.server.worlds.load().iter() {
@@ -287,7 +302,13 @@ impl Context {
             ));
         }
 
-        self.permission_manager.register_permission(permission)
+        let node = permission.node.clone();
+        self.permission_manager.register_permission(permission)?;
+        self.permissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(node);
+        Ok(())
     }
 
     /// Check if a player has a permission

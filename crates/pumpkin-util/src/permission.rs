@@ -160,6 +160,11 @@ impl PermissionRegistry {
     pub fn has_permission(&self, node: &str) -> bool {
         self.permissions.contains_key(node)
     }
+
+    /// Removes a permission node from the registry, returning whether it was registered.
+    pub fn unregister_permission(&self, node: &str) -> bool {
+        self.permissions.remove(node).is_some()
+    }
 }
 
 /// Storage for player permissions.
@@ -277,6 +282,11 @@ impl PermissionManager {
     #[must_use]
     pub fn has_registered_permission(&self, node: &str) -> bool {
         self.registry.has_permission(node)
+    }
+
+    /// Removes a permission node from the global registry, returning whether it was registered.
+    pub fn unregister_permission(&self, node: &str) -> bool {
+        self.registry.unregister_permission(node)
     }
 
     /// Sets a player's explicit permission.
