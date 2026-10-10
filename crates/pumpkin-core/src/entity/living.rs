@@ -617,6 +617,17 @@ impl LivingEntity {
 
     /// Picks up an Item entity or XP Orb
     pub fn pickup(&self, item: &Entity, stack_amount: u32) -> bool {
+        if !self.fire_pickup_event(item, stack_amount) {
+            return false;
+        }
+        self.send_take_item(item, stack_amount);
+        true
+    }
+
+    /// Fires `EntityPickupItemEvent`, returning `false` when a plugin cancelled it.
+    ///
+    /// Callers fire it before the item moves, so a cancelled pickup leaves it on the ground.
+    pub fn fire_pickup_event(&self, item: &Entity, stack_amount: u32) -> bool {
         let mut pickup_event =
             crate::plugin::api::events::entity::entity_pickup_item::EntityPickupItemEvent::new(
                 self.entity.entity_id,
@@ -631,7 +642,11 @@ impl LivingEntity {
                 return false;
             }
         }
+        true
+    }
 
+    /// Shows the item flying into this entity, like vanilla's `LivingEntity.take`.
+    pub fn send_take_item(&self, item: &Entity, stack_amount: u32) {
         let chunk_pos = self.entity.chunk_pos.load();
         self.entity.world.load().broadcast_to_chunk_editioned(
             chunk_pos,
@@ -645,7 +660,6 @@ impl LivingEntity {
                 actor_runtime_id: VarULong(self.entity.entity_id as u64),
             },
         );
-        true
     }
 
     /// Sends the Hand animation to all others, used when Eating for example
