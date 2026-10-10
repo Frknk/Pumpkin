@@ -566,12 +566,16 @@ pub trait EntityBase: Send + Sync + std::any::Any {
             dx *= 0.05;
             dz *= 0.05;
 
+            // Vanilla's push only sets `needsSync`, which never sends a player its own motion:
+            // the client already pushes its player, and a second push from us bounces it.
             if !self_entity.has_passengers() && self.is_pushable() {
                 let mut vel = self_entity.velocity.load();
                 vel.x -= dx;
                 vel.z -= dz;
                 self_entity.velocity.store(vel);
-                self_entity.velocity_dirty.store(true, Ordering::SeqCst);
+                if self.get_player().is_none() {
+                    self_entity.velocity_dirty.store(true, Ordering::SeqCst);
+                }
             }
 
             if !other_entity.has_passengers() && entity.is_pushable() {
@@ -579,7 +583,9 @@ pub trait EntityBase: Send + Sync + std::any::Any {
                 vel.x += dx;
                 vel.z += dz;
                 other_entity.velocity.store(vel);
-                other_entity.velocity_dirty.store(true, Ordering::SeqCst);
+                if entity.get_player().is_none() {
+                    other_entity.velocity_dirty.store(true, Ordering::SeqCst);
+                }
             }
         }
     }
