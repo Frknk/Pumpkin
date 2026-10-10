@@ -3118,6 +3118,7 @@ impl pumpkin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
                     sync_id,
                     window_type,
                     &inventory,
+                    &player.inventory,
                     allow_grab_items,
                     allow_put_items,
                 )));

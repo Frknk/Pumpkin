@@ -89,9 +89,9 @@ impl gui::HostGui for PluginHostState {
             pumpkin_data::screen::WindowType::Generic9x4 => 36,
             pumpkin_data::screen::WindowType::Generic9x5 => 45,
             pumpkin_data::screen::WindowType::Generic9x6 => 54,
-            pumpkin_data::screen::WindowType::Generic3x3 => 9,
             pumpkin_data::screen::WindowType::Generic9x1
-            | pumpkin_data::screen::WindowType::Hopper => 5,
+            | pumpkin_data::screen::WindowType::Generic3x3 => 9,
+            pumpkin_data::screen::WindowType::Hopper => 5,
             _ => 27, // Default
         };
 
