@@ -3082,6 +3082,10 @@ impl World {
             &bedrock_player_list,
         );
 
+        // Vanilla `PlayerList.placeNewPlayer`: viewers learn the tab entry before the spawn.
+        self.entity_tracker
+            .add_entity(&(player.clone() as Arc<dyn EntityBase>), self);
+
         // Bedrock gets `AddPlayer` from the tracker.
         self.broadcast_packet_except(
             &[gameprofile.id],
@@ -3460,6 +3464,10 @@ impl World {
                 }
             }
         };
+
+        // Vanilla `PlayerList.placeNewPlayer`: viewers learn the tab entry before the spawn.
+        self.entity_tracker
+            .add_entity(&(player.clone() as Arc<dyn EntityBase>), self);
 
         let gameprofile = &player.gameprofile;
 
@@ -4636,6 +4644,7 @@ impl World {
     /// This function takes a player's UUID and an `Arc<Player>` reference.
     /// It inserts the player into the world's `current_players` map using the UUID as the key.
     /// Additionally, it broadcasts a join message to all connected players in the world.
+    /// The spawn functions add the player to the entity tracker once the tab list knows them.
     ///
     /// # Arguments
     ///
@@ -4646,8 +4655,6 @@ impl World {
             new_list.push(player.clone());
             new_list
         });
-        self.entity_tracker
-            .add_entity(&(player.clone() as Arc<dyn EntityBase>), self);
         Ok(())
     }
 
