@@ -17,7 +17,7 @@ use tracing::Level;
 
 use crate::{
     entity::player::Player,
-    plugin::{EventHandler, HandlerMap, PluginManager, TypedEventHandler},
+    plugin::{EventHandler, HandlerMap, PluginManager, TypedEventHandler, insert_by_priority},
     server::Server,
 };
 
@@ -334,10 +334,10 @@ impl Context {
 
         self.handlers.rcu(|handlers| {
             let mut new_handlers = (**handlers).clone();
-            new_handlers
-                .entry(E::get_name_static())
-                .or_default()
-                .push(typed_handler.clone());
+            insert_by_priority(
+                new_handlers.entry(E::get_name_static()).or_default(),
+                typed_handler.clone(),
+            );
             Arc::new(new_handlers)
         });
     }

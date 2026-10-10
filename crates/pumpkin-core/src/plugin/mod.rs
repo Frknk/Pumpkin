@@ -172,6 +172,17 @@ where
 /// and the value is a vector of dynamic event handlers.
 pub type HandlerMap = HashMap<&'static str, Vec<Arc<dyn DynEventHandler>>>;
 
+/// Adds `handler` to an event's handlers, which are kept in the order they run: from `Lowest`
+/// to `Highest` priority, and in registration order within a priority.
+pub(crate) fn insert_by_priority(
+    handlers: &mut Vec<Arc<dyn DynEventHandler>>,
+    handler: Arc<dyn DynEventHandler>,
+) {
+    let index =
+        handlers.partition_point(|existing| existing.get_priority() >= handler.get_priority());
+    handlers.insert(index, handler);
+}
+
 /// Plugin loading state
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginState {
@@ -1180,10 +1191,10 @@ impl PluginManager {
 
         self.handlers.rcu(|handlers| {
             let mut new_handlers = (**handlers).clone();
-            new_handlers
-                .entry(E::get_name_static())
-                .or_default()
-                .push(typed_handler.clone());
+            insert_by_priority(
+                new_handlers.entry(E::get_name_static()).or_default(),
+                typed_handler.clone(),
+            );
             Arc::new(new_handlers)
         });
     }
@@ -1314,6 +1325,57 @@ impl PluginManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct NamedHandler(EventPriority, &'static str);
+
+    impl DynEventHandler for NamedHandler {
+        fn handle_dyn<'a>(
+            &'a self,
+            _server: &'a Arc<Server>,
+            _event: &'a (dyn Payload + Send + Sync),
+        ) -> BoxFuture<'a, ()> {
+            Box::pin(async {})
+        }
+
+        fn handle_blocking_dyn<'a>(
+            &'a self,
+            _server: &'a Arc<Server>,
+            _event: &'a mut (dyn Payload + Send + Sync),
+        ) -> BoxFuture<'a, ()> {
+            Box::pin(async {})
+        }
+
+        fn is_blocking(&self) -> bool {
+            true
+        }
+
+        fn get_priority(&self) -> &EventPriority {
+            &self.0
+        }
+
+        fn source(&self) -> Option<&str> {
+            Some(self.1)
+        }
+    }
+
+    #[test]
+    fn handlers_run_from_lowest_to_highest_priority() {
+        let mut handlers: Vec<Arc<dyn DynEventHandler>> = Vec::new();
+        for (priority, name) in [
+            (EventPriority::Highest, "highest"),
+            (EventPriority::Lowest, "lowest first"),
+            (EventPriority::Normal, "normal"),
+            (EventPriority::Lowest, "lowest second"),
+            (EventPriority::High, "high"),
+        ] {
+            insert_by_priority(&mut handlers, Arc::new(NamedHandler(priority, name)));
+        }
+        let order: Vec<_> = handlers.iter().filter_map(|h| h.source()).collect();
+        assert_eq!(
+            order,
+            ["lowest first", "lowest second", "normal", "high", "highest"]
+        );
+    }
 
     #[tokio::test]
     async fn topological_sort() {

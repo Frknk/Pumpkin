@@ -127,8 +127,8 @@ pub trait Cancellable: Send + Sync {
 }
 /// An enumeration representing the priority levels of events.
 ///
-/// Events with lower priority values are executed first, allowing higher priority events
-/// to override their changes.
+/// Handlers run from `Lowest` to `Highest`, so a higher priority handler sees and can
+/// override the changes of lower priority ones.
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone)]
 pub enum EventPriority {
     /// Highest priority level.
