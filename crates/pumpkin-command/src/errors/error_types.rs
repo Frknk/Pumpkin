@@ -112,6 +112,12 @@ pub const DISPATCHER_PARSE_EXCEPTION: CommandErrorType<1> = CommandErrorType::ne
     translation::java::COMMAND_EXCEPTION,
     translation::bedrock::COMMANDS_GENERIC_SYNTAX,
 );
+/// A command that failed while running. Callers with their own failure message pass it to
+/// `CommandSyntaxError::create_without_context` with this type, so it shows as-is.
+pub const COMMAND_FAILED: CommandErrorType<0> = CommandErrorType::new(
+    translation::java::COMMAND_FAILED,
+    translation::bedrock::COMMANDS_GENERIC_EXCEPTION,
+);
 
 use crate::errors::{
     command_syntax_error::{CommandSyntaxError, ContextProvider},

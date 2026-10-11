@@ -9,7 +9,10 @@ use crate::pumpkin::plugin::command::{CommandError as CommandErrorWit, Suggestio
 use pumpkin_core::{
     command::{
         context::command_context::CommandContext,
-        errors::error_types::DISPATCHER_PARSE_EXCEPTION,
+        errors::{
+            command_syntax_error::CommandSyntaxError,
+            error_types::{COMMAND_FAILED, DISPATCHER_PARSE_EXCEPTION},
+        },
         node::{CommandExecutor, CommandExecutorResult},
         suggestion::{
             provider::SuggestionProvider,
@@ -36,12 +39,15 @@ fn map_command_result(
             .create_without_context(TextComponent::text("Invalid requirement"))),
         Err(CommandErrorWit::PermissionDenied) => Err(DISPATCHER_PARSE_EXCEPTION
             .create_without_context(TextComponent::text("Permission denied"))),
-        Err(CommandErrorWit::CommandFailed(resource)) => Err(DISPATCHER_PARSE_EXCEPTION
-            .create_without_context(
+        // The plugin's own failure message, shown as-is like a vanilla command's.
+        Err(CommandErrorWit::CommandFailed(resource)) => {
+            Err(CommandSyntaxError::create_without_context(
+                &COMMAND_FAILED,
                 state
                     .take(resource)
                     .expect("todo: make this method return a result"),
-            )),
+            ))
+        }
     }
 }
 
