@@ -28,30 +28,20 @@ impl Default for HungerManager {
 
 impl HungerManager {
     pub fn tick(&self, player: &Player) {
-        let mut level = self.level.load();
-        let mut saturation = self.saturation.load();
-        let mut exhaustion = self.exhaustion.load();
-        let mut timer = self.tick_timer.load();
-
         let level_info = player.world().level_info.load();
         let difficulty = level_info.difficulty;
         let natural_regen = level_info.game_rules.natural_health_regeneration;
         let health = player.living_entity.health.load();
         let can_heal = player.can_food_heal();
 
-        let mut needs_sync = false;
+        let mut needs_sync = self.drain_exhaustion(player, difficulty);
+
+        let level = self.level.load();
+        let saturation = self.saturation.load();
+        let mut exhaustion = self.exhaustion.load();
+        let mut timer = self.tick_timer.load();
         let mut heal_amount = 0.0;
         let mut damage_amount = 0.0;
-
-        if exhaustion > EXHAUSTION_COST {
-            exhaustion -= EXHAUSTION_COST;
-            if saturation > 0.0 {
-                saturation = (saturation - 1.0).max(0.0);
-            } else if difficulty != Difficulty::Peaceful {
-                level = level.saturating_sub(1);
-            }
-            needs_sync = true;
-        }
 
         if natural_regen && saturation > 0.0 && can_heal && level >= 20 {
             timer += 1;
@@ -88,8 +78,6 @@ impl HungerManager {
         }
 
         if needs_sync || timer != self.tick_timer.load() {
-            self.level.store(level);
-            self.saturation.store(saturation);
             self.exhaustion.store(exhaustion);
             self.tick_timer.store(timer);
         }
@@ -105,6 +93,27 @@ impl HungerManager {
                 .living_entity
                 .damage(player, damage_amount, DamageType::STARVE);
         }
+    }
+
+    /// Spends exhaustion on saturation first, then on food. Returns whether any was spent.
+    fn drain_exhaustion(&self, player: &Player, difficulty: Difficulty) -> bool {
+        let exhaustion = self.exhaustion.load();
+        if exhaustion <= EXHAUSTION_COST {
+            return false;
+        }
+        self.exhaustion.store(exhaustion - EXHAUSTION_COST);
+
+        let saturation = self.saturation.load();
+        if saturation > 0.0 {
+            self.saturation.store((saturation - 1.0).max(0.0));
+        } else if difficulty != Difficulty::Peaceful {
+            let level = self.level.load();
+            if level > 0 {
+                // Fires FoodLevelChangeEvent, so plugins can cancel or change the drop.
+                player.set_food_level(level - 1);
+            }
+        }
+        true
     }
 
     pub fn eat(&self, player: &Player, food: u8, saturation: f32) {
