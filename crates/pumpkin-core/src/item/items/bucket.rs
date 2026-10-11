@@ -6,7 +6,7 @@ use crate::{
     item::{ItemBehaviour, ItemMetadata},
 };
 use pumpkin_data::{
-    Block, BlockDirection,
+    Block, BlockDirection, BlockStateId,
     entity::EntityType,
     fluid::Fluid,
     item::Item,
@@ -144,62 +144,104 @@ fn give_player_bucket_item(player: &Player, item: &'static Item) {
     }
 }
 
+/// What an empty bucket takes from a block, found without changing the world.
+enum FluidPickup {
+    PowderSnow,
+    /// A waterlogged block, with its state once drained.
+    Waterlogged(BlockStateId),
+    Source(&'static Item),
+}
+
+impl FluidPickup {
+    fn at(world: &World, block_pos: &BlockPos) -> Option<Self> {
+        let (block, state) = world.get_block_and_state_id(block_pos);
+
+        if block == &Block::POWDER_SNOW {
+            return Some(Self::PowderSnow);
+        }
+        if block.is_waterlogged(state) {
+            return Some(Self::Waterlogged(
+                block.set_waterlogged(state, false).unwrap_or(state),
+            ));
+        }
+        if state == Block::LAVA.default_state.id {
+            return Some(Self::Source(&Item::LAVA_BUCKET));
+        }
+        if state == Block::WATER.default_state.id {
+            return Some(Self::Source(&Item::WATER_BUCKET));
+        }
+        None
+    }
+
+    const fn item(&self) -> &'static Item {
+        match self {
+            Self::PowderSnow => &Item::POWDER_SNOW_BUCKET,
+            Self::Waterlogged(_) => &Item::WATER_BUCKET,
+            Self::Source(item) => item,
+        }
+    }
+
+    fn take(&self, world: &Arc<World>, block_pos: BlockPos) {
+        match self {
+            Self::PowderSnow => {
+                world.break_block(
+                    &block_pos,
+                    None,
+                    BlockFlags::NOTIFY_ALL | BlockFlags::SKIP_DROPS,
+                );
+            }
+            Self::Waterlogged(drained) => {
+                world.set_block_state(&block_pos, *drained, BlockFlags::NOTIFY_ALL);
+                world.schedule_fluid_tick(&Fluid::WATER, block_pos, 5, TickPriority::Normal);
+            }
+            Self::Source(_) => {
+                world.break_block(&block_pos, None, BlockFlags::NOTIFY_ALL);
+                world.set_block_state(
+                    &block_pos,
+                    Block::AIR.default_state.id,
+                    BlockFlags::NOTIFY_ALL,
+                );
+            }
+        }
+    }
+}
+
 pub(crate) fn try_pickup_fluid_at(
     world: &Arc<World>,
     block_pos: BlockPos,
 ) -> Option<&'static Item> {
-    let (block, state) = world.get_block_and_state_id(&block_pos);
-
-    if block == &Block::POWDER_SNOW {
-        world.break_block(
-            &block_pos,
-            None,
-            BlockFlags::NOTIFY_ALL | BlockFlags::SKIP_DROPS,
-        );
-        return Some(&Item::POWDER_SNOW_BUCKET);
-    }
-
-    if block.is_waterlogged(state) {
-        let state_id = block.set_waterlogged(state, false).unwrap_or(state);
-        world.set_block_state(&block_pos, state_id, BlockFlags::NOTIFY_ALL);
-        world.schedule_fluid_tick(&Fluid::WATER, block_pos, 5, TickPriority::Normal);
-        return Some(&Item::WATER_BUCKET);
-    }
-
-    if state == Block::LAVA.default_state.id || state == Block::WATER.default_state.id {
-        world.break_block(&block_pos, None, BlockFlags::NOTIFY_ALL);
-        world.set_block_state(
-            &block_pos,
-            Block::AIR.default_state.id,
-            BlockFlags::NOTIFY_ALL,
-        );
-        return Some(if state == Block::LAVA.default_state.id {
-            &Item::LAVA_BUCKET
-        } else {
-            &Item::WATER_BUCKET
-        });
-    }
-
-    None
+    let pickup = FluidPickup::at(world, &block_pos)?;
+    pickup.take(world, block_pos);
+    Some(pickup.item())
 }
 
-fn try_pickup_bucket_item(
-    world: &Arc<World>,
+/// Where an empty bucket used on `block_pos` would take its fluid from, and what it would take,
+/// without changing the world.
+fn find_bucket_pickup(
+    world: &World,
     block_pos: BlockPos,
     direction: BlockDirection,
-) -> Option<&'static Item> {
-    if let Some(item) = try_pickup_fluid_at(world, block_pos) {
-        return Some(item);
+) -> Option<(BlockPos, FluidPickup)> {
+    if let Some(pickup) = FluidPickup::at(world, &block_pos) {
+        return Some((block_pos, pickup));
     }
 
     let target_pos = block_pos.offset(direction.to_offset());
     let (block, state) = world.get_block_and_state_id(&target_pos);
-
     let unwaterlogged = block.set_waterlogged(state, false)?;
+    Some((target_pos, FluidPickup::Waterlogged(unwaterlogged)))
+}
 
-    world.set_block_state(&target_pos, unwaterlogged, BlockFlags::NOTIFY_ALL);
-    world.schedule_fluid_tick(&Fluid::WATER, target_pos, 5, TickPriority::Normal);
-    Some(&Item::WATER_BUCKET)
+/// Sends the player's inventory again, for a bucket use the client already applied on its side.
+fn resync_inventory(player: &Player) {
+    player
+        .current_screen_handler
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .sync_state();
 }
 
 pub(crate) const fn should_evaporate_in_nether(item: &Item, world: &World) -> bool {
@@ -329,7 +371,7 @@ impl ItemBehaviour for EmptyBucketItem {
             return;
         };
 
-        let Some(item) = try_pickup_bucket_item(&world, block_pos, direction) else {
+        let Some((pickup_pos, pickup)) = find_bucket_pickup(&world, block_pos, direction) else {
             return;
         };
 
@@ -340,13 +382,21 @@ impl ItemBehaviour for EmptyBucketItem {
                 crate::plugin::api::events::player::player_bucket::PlayerBucketFillEvent::new(
                     player_arc,
                     block_pos,
-                    item.registry_key.to_string(),
+                    pickup.item().registry_key.to_string(),
                 );
             server.plugin_manager.fire_blocking(&server, &mut event);
             if event.cancelled {
+                // The client already filled its bucket, so send it the empty bucket back.
+                resync_inventory(player);
                 return;
             }
         }
+
+        // A handler may have changed the block, so take whatever is there now.
+        let Some(item) = try_pickup_fluid_at(&world, pickup_pos) else {
+            resync_inventory(player);
+            return;
+        };
 
         world.play_sound(
             get_fill_sound(item),
@@ -435,14 +485,7 @@ impl ItemBehaviour for FilledBucketItem {
         if !try_place_filled_bucket(&world, item, pos, direction, allow) {
             if cancelled {
                 // The client already emptied its bucket, so send it the full bucket back.
-                player
-                    .current_screen_handler
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone()
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .sync_state();
+                resync_inventory(player);
             }
             return;
         }
