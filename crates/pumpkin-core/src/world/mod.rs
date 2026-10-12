@@ -3225,6 +3225,110 @@ impl World {
             ))
             .await;
 
+        // Vanilla `PlayerList.placeNewPlayer`: the tab entries of everyone already here go out
+        // before the player can track them. Chunk batches sent from the player's tick pair
+        // nearby players, and a client drops a player spawn whose tab entry it lacks.
+        let mut players_tab_list_names = Vec::new();
+        {
+            let players = self.players.load();
+            let mut data_to_process = Vec::new();
+            for p in players
+                .iter()
+                .filter(|p| p.gameprofile.id != player.gameprofile.id)
+            {
+                let props_guard = p.gameprofile.properties.load();
+                data_to_process.push((props_guard, p));
+            }
+
+            let mut current_player_data = Vec::new();
+            for (properties, player) in &data_to_process {
+                let chat_session = player
+                    .chat_session
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let tab_list_name = player.get_tab_list_name();
+
+                let mut player_actions = vec![PlayerAction::AddPlayer {
+                    name: &player.gameprofile.name,
+                    properties,
+                }];
+
+                if base_config.allow_chat_reports {
+                    let initialized = chat_session.session_id != uuid::Uuid::nil()
+                        && !chat_session.public_key.is_empty()
+                        && !chat_session.signature.is_empty();
+                    player_actions.push(PlayerAction::InitializeChat(initialized.then(|| {
+                        InitChat {
+                            session_id: chat_session.session_id,
+                            expires_at: chat_session.expires_at,
+                            public_key: chat_session.public_key.clone(),
+                            signature: chat_session.signature.clone(),
+                        }
+                    })));
+                }
+
+                player_actions.extend([
+                    PlayerAction::UpdateGameMode(VarInt(player.gamemode.load() as i32)),
+                    PlayerAction::UpdateListed(player.tab_list_listed.load(Ordering::Relaxed)),
+                    PlayerAction::UpdateLatency(VarInt(
+                        player.tab_list_latency.load(Ordering::Relaxed),
+                    )),
+                    PlayerAction::UpdateListOrder(VarInt(
+                        player.tab_list_order.load(Ordering::Relaxed),
+                    )),
+                    PlayerAction::UpdateHat(true),
+                ]);
+                drop(chat_session);
+
+                current_player_data.push((&player.gameprofile.id, player_actions));
+
+                // Collect tab_list_names for sending later
+                if tab_list_name.is_some() {
+                    players_tab_list_names.push((player.gameprofile.id, tab_list_name));
+                }
+            }
+
+            let mut action_flags = PlayerInfoFlags::ADD_PLAYER
+                | PlayerInfoFlags::UPDATE_LISTED
+                | PlayerInfoFlags::UPDATE_LATENCY
+                | PlayerInfoFlags::UPDATE_LIST_PRIORITY
+                | PlayerInfoFlags::UPDATE_GAME_MODE
+                | PlayerInfoFlags::UPDATE_HAT;
+            if base_config.allow_chat_reports {
+                action_flags |= PlayerInfoFlags::INITIALIZE_CHAT;
+            }
+
+            let entries = current_player_data
+                .iter()
+                .map(|(id, actions)| java::client::play::Player {
+                    uuid: **id,
+                    actions,
+                })
+                .collect::<Vec<_>>();
+
+            debug!("Sending player info to {}", player.gameprofile.name);
+            client
+                .enqueue_client_packet(&CPlayerInfoUpdate::new(action_flags.bits(), &entries))
+                .await;
+
+            // Send tab_list_names for existing players with custom names
+            for (player_id, tab_list_name) in &players_tab_list_names {
+                if let Some(name) = tab_list_name {
+                    let actions = [PlayerAction::UpdateDisplayName(Some(name))];
+                    let java_player = [pumpkin_protocol::java::client::play::Player {
+                        uuid: *player_id,
+                        actions: &actions,
+                    }];
+                    client
+                        .enqueue_client_packet(&CPlayerInfoUpdate::new(
+                            PlayerInfoFlags::UPDATE_DISPLAY_NAME.bits(),
+                            &java_player,
+                        ))
+                        .await;
+                }
+            }
+        };
+
         self.pair_new_player_with_tracked_entities(player);
 
         // Send the current ticking state to the new player so they are in sync.
@@ -3363,107 +3467,6 @@ impl World {
             ));
         }
 
-        // Here, we send all the infos of players who already joined.
-        let mut players_tab_list_names = Vec::new();
-        {
-            let players = self.players.load();
-            let mut data_to_process = Vec::new();
-            for p in players
-                .iter()
-                .filter(|p| p.gameprofile.id != player.gameprofile.id)
-            {
-                let props_guard = p.gameprofile.properties.load();
-                data_to_process.push((props_guard, p));
-            }
-
-            let mut current_player_data = Vec::new();
-            for (properties, player) in &data_to_process {
-                let chat_session = player
-                    .chat_session
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let tab_list_name = player.get_tab_list_name();
-
-                let mut player_actions = vec![PlayerAction::AddPlayer {
-                    name: &player.gameprofile.name,
-                    properties,
-                }];
-
-                if base_config.allow_chat_reports {
-                    let initialized = chat_session.session_id != uuid::Uuid::nil()
-                        && !chat_session.public_key.is_empty()
-                        && !chat_session.signature.is_empty();
-                    player_actions.push(PlayerAction::InitializeChat(initialized.then(|| {
-                        InitChat {
-                            session_id: chat_session.session_id,
-                            expires_at: chat_session.expires_at,
-                            public_key: chat_session.public_key.clone(),
-                            signature: chat_session.signature.clone(),
-                        }
-                    })));
-                }
-
-                player_actions.extend([
-                    PlayerAction::UpdateGameMode(VarInt(player.gamemode.load() as i32)),
-                    PlayerAction::UpdateListed(player.tab_list_listed.load(Ordering::Relaxed)),
-                    PlayerAction::UpdateLatency(VarInt(
-                        player.tab_list_latency.load(Ordering::Relaxed),
-                    )),
-                    PlayerAction::UpdateListOrder(VarInt(
-                        player.tab_list_order.load(Ordering::Relaxed),
-                    )),
-                    PlayerAction::UpdateHat(true),
-                ]);
-                drop(chat_session);
-
-                current_player_data.push((&player.gameprofile.id, player_actions));
-
-                // Collect tab_list_names for sending later
-                if tab_list_name.is_some() {
-                    players_tab_list_names.push((player.gameprofile.id, tab_list_name));
-                }
-            }
-
-            let mut action_flags = PlayerInfoFlags::ADD_PLAYER
-                | PlayerInfoFlags::UPDATE_LISTED
-                | PlayerInfoFlags::UPDATE_LATENCY
-                | PlayerInfoFlags::UPDATE_LIST_PRIORITY
-                | PlayerInfoFlags::UPDATE_GAME_MODE
-                | PlayerInfoFlags::UPDATE_HAT;
-            if base_config.allow_chat_reports {
-                action_flags |= PlayerInfoFlags::INITIALIZE_CHAT;
-            }
-
-            let entries = current_player_data
-                .iter()
-                .map(|(id, actions)| java::client::play::Player {
-                    uuid: **id,
-                    actions,
-                })
-                .collect::<Vec<_>>();
-
-            debug!("Sending player info to {}", player.gameprofile.name);
-            client
-                .enqueue_client_packet(&CPlayerInfoUpdate::new(action_flags.bits(), &entries))
-                .await;
-
-            // Send tab_list_names for existing players with custom names
-            for (player_id, tab_list_name) in &players_tab_list_names {
-                if let Some(name) = tab_list_name {
-                    let actions = [PlayerAction::UpdateDisplayName(Some(name))];
-                    let java_player = [pumpkin_protocol::java::client::play::Player {
-                        uuid: *player_id,
-                        actions: &actions,
-                    }];
-                    client
-                        .enqueue_client_packet(&CPlayerInfoUpdate::new(
-                            PlayerInfoFlags::UPDATE_DISPLAY_NAME.bits(),
-                            &java_player,
-                        ))
-                        .await;
-                }
-            }
-        };
 
         // Vanilla `PlayerList.placeNewPlayer`: viewers learn the tab entry before the spawn.
         self.entity_tracker
