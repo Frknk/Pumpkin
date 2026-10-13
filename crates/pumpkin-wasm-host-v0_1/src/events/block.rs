@@ -1,6 +1,8 @@
 use pumpkin_data::BlockStateId;
+use pumpkin_data::item_stack::ItemStack;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use wasmtime::component::Resource;
 
 use crate::{
     events::{
@@ -825,6 +827,23 @@ impl ToFromWasmEvent for BlockDropItemEvent {
     }
 
     fn apply_wasm_event(&mut self, event: Event, state: &mut PluginHostState) {
+        // Read the stacks before cleanup discards their resources: plugins may
+        // edit, replace or drop them, and those edits are what the block drops.
+        if let Event::BlockDropItemEvent(data) = &event {
+            self.items = data
+                .items
+                .iter()
+                .map(|item| {
+                    state
+                        .resource_table
+                        .get::<Arc<Mutex<ItemStack>>>(&Resource::new_borrow(item.rep()))
+                        .expect("invalid item stack resource handle")
+                        .try_lock()
+                        .expect("lock item stack")
+                        .clone()
+                })
+                .collect();
+        }
         cleanup_event(&event, state);
         if let Event::BlockDropItemEvent(data) = event {
             self.cancelled = data.cancelled;
