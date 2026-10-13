@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
-use crate::entity::projectile::{ProjectileHit, calculate_ray_intersection};
+use crate::entity::projectile::{
+    ProjectileHit, calculate_ray_intersection, can_be_hit_by_projectile,
+};
 use crate::{
     entity::{Entity, EntityBase, living::LivingEntity, player::Player},
     server::Server,
@@ -749,7 +751,7 @@ impl EntityBase for ArrowEntity {
         }
 
         // Entity collisions
-        let candidates = world.get_entities_at_box(&search_box);
+        let candidates = world.get_all_at_box(&search_box);
         for cand in candidates {
             if self.should_skip_collision(entity, &cand) {
                 continue;
@@ -1081,8 +1083,8 @@ impl ArrowEntity {
             return true;
         }
 
-        // Skip dead entities
-        if !other_ent.is_alive() {
+        // Skip dead entities and spectators
+        if !can_be_hit_by_projectile(other.as_ref()) {
             return true;
         }
 

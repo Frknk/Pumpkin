@@ -28,6 +28,17 @@ pub mod wither_skull;
 
 use pumpkin_data::item_stack::ItemStack;
 
+/// The shared part of vanilla `Entity.canBeHitByProjectile`: the target is alive and,
+/// for a player, not a spectator.
+#[must_use]
+pub fn can_be_hit_by_projectile(target: &dyn EntityBase) -> bool {
+    target.get_entity().is_alive()
+        && !target.is_spectator()
+        && target
+            .get_living_entity()
+            .is_none_or(|living| !living.dead.load(Ordering::Relaxed))
+}
+
 #[must_use]
 pub fn is_projectile(entity_type: &EntityType) -> bool {
     *entity_type == EntityType::ARROW
@@ -211,7 +222,7 @@ impl ThrownItemEntity {
         }
 
         // Entity collisions
-        let candidates = world.get_entities_at_box(&search_box);
+        let candidates = world.get_all_at_box(&search_box);
         for cand in candidates {
             if self.should_skip_collision(entity, &cand) {
                 continue;
@@ -257,7 +268,7 @@ impl ThrownItemEntity {
     /// Returns if collision should be skipped (e.g. owner or projectile vs projectile)
     fn should_skip_collision(&self, self_ent: &Entity, other: &Arc<dyn EntityBase>) -> bool {
         let other_ent = other.get_entity();
-        if other_ent.entity_id == self_ent.entity_id {
+        if other_ent.entity_id == self_ent.entity_id || !can_be_hit_by_projectile(other.as_ref()) {
             return true;
         }
 

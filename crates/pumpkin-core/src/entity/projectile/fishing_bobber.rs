@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
-use crate::entity::projectile::{ProjectileHit, is_projectile};
+use crate::entity::projectile::{ProjectileHit, can_be_hit_by_projectile, is_projectile};
 use crate::{
     entity::{Entity, EntityBase, living::LivingEntity, player::Player},
     server::Server,
@@ -187,10 +187,11 @@ impl FishingBobberEntity {
 
         entity.set_pos(new_pos);
 
-        let candidates = world.get_entities_at_box(&search_box);
+        let candidates = world.get_all_at_box(&search_box);
         for cand in candidates {
             if cand.get_entity().entity_id == self.owner_id
                 || cand.get_entity().entity_id == entity.entity_id
+                || !can_be_hit_by_projectile(cand.as_ref())
             {
                 continue;
             }

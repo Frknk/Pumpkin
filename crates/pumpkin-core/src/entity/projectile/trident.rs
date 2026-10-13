@@ -16,7 +16,7 @@ use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
 
 use super::arrow::ArrowPickup;
-use super::{ProjectileHit, calculate_ray_intersection};
+use super::{ProjectileHit, calculate_ray_intersection, can_be_hit_by_projectile};
 
 pub struct TridentEntity {
     pub entity: Entity,
@@ -133,8 +133,8 @@ impl TridentEntity {
     fn should_skip_collision(&self, self_ent: &Entity, other: &Arc<dyn EntityBase>) -> bool {
         let other_ent = other.get_entity();
 
-        // Don't collide with self
-        if other_ent.entity_id == self_ent.entity_id {
+        // Don't collide with self, dead entities or spectators
+        if other_ent.entity_id == self_ent.entity_id || !can_be_hit_by_projectile(other.as_ref()) {
             return true;
         }
 
@@ -261,7 +261,7 @@ impl EntityBase for TridentEntity {
         }
 
         // Entity collisions
-        let candidates = world.get_entities_at_box(&search_box);
+        let candidates = world.get_all_at_box(&search_box);
         for cand in candidates {
             if self.should_skip_collision(entity, &cand) {
                 continue;

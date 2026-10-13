@@ -50,7 +50,7 @@ impl EntityBase for EvokerFangsEntity {
         if warmup < 0 {
             if warmup == -8 {
                 let bb = entity.bounding_box.load().expand(0.2, 0.0, 0.2);
-                let candidates = world.get_entities_at_box(&bb);
+                let candidates = world.get_all_at_box(&bb);
 
                 let owner = self.owner_id.and_then(|id| world.get_entity_by_id(id));
 
@@ -60,7 +60,9 @@ impl EntityBase for EvokerFangsEntity {
                         continue;
                     }
 
-                    if cand_ent.entity_id != entity.entity_id && cand.get_living_entity().is_some()
+                    if cand_ent.entity_id != entity.entity_id
+                        && cand.get_living_entity().is_some()
+                        && !cand.is_spectator()
                     {
                         let damage_type = if owner.is_some() {
                             DamageType::INDIRECT_MAGIC
