@@ -8,8 +8,10 @@ use super::PlayerEvent;
 
 /// An event that occurs when a player respawns.
 ///
-/// This is a notification fired once a respawn destination (world, position and
-/// rotation) has been determined. It is not cancellable.
+/// Fired once a respawn destination (world, position and rotation) has been
+/// determined, before the player is sent there. It is not cancellable. Handlers
+/// may change `position`, `yaw` and `pitch`, and the player respawns there;
+/// `respawned_world` is read-only (the world transfer already happened).
 ///
 /// On a cross-dimension respawn the cancellable
 /// [`PlayerChangeWorldEvent`](super::player_change_world::PlayerChangeWorldEvent)

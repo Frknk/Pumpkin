@@ -4086,24 +4086,29 @@ impl World {
             |new_world| (new_world.clone(), position, yaw, pitch),
         );
 
-        // Notify plugins that the player has respawned (non-cancellable).
+        // Notify plugins that the player respawns (non-cancellable). Handlers may move
+        // the respawn within the target world, like Bukkit's `setRespawnLocation`.
+        let mut respawn_event = PlayerRespawnEvent::new(
+            player.clone(),
+            self.clone(),
+            target_world.clone(),
+            position,
+            yaw,
+            pitch,
+            alive,
+        );
         if let Some(server) = self.server.upgrade() {
             server
                 .plugin_manager
-                .fire(
-                    &server,
-                    &mut PlayerRespawnEvent::new(
-                        player.clone(),
-                        self.clone(),
-                        target_world.clone(),
-                        position,
-                        yaw,
-                        pitch,
-                        alive,
-                    ),
-                )
+                .fire(&server, &mut respawn_event)
                 .await;
         }
+        let PlayerRespawnEvent {
+            position,
+            yaw,
+            pitch,
+            ..
+        } = respawn_event;
 
         // Send respawn packet with target dimension (using send_packet_now to ensure proper order)
         player
