@@ -4763,6 +4763,30 @@ impl World {
         player: &Arc<Player>,
         fire_event: bool,
     ) -> Option<Arc<Player>> {
+        // Like Bukkit's PlayerQuitEvent, leave handlers run while the player is still in
+        // the world, so a player they kill (a combat log) dies like any other: death
+        // event, drops and an emptied inventory in the saved data.
+        let leave_event = if fire_event
+            && self
+                .players
+                .load()
+                .iter()
+                .any(|p| p.gameprofile.id == player.gameprofile.id)
+            && let Some(server) = self.server.upgrade()
+        {
+            let msg_comp = TextComponent::translate_cross(
+                translation::java::MULTIPLAYER_PLAYER_LEFT,
+                translation::bedrock::MULTIPLAYER_PLAYER_LEFT,
+                [TextComponent::text(player.gameprofile.name.clone())],
+            )
+            .color_named(NamedColor::Yellow);
+            let mut event = PlayerLeaveEvent::new(player.clone(), msg_comp);
+            server.plugin_manager.fire(&server, &mut event).await;
+            Some(event)
+        } else {
+            None
+        };
+
         let mut removed_player: Option<Arc<Player>> = None;
 
         self.players.rcu(|current_list| {
@@ -4806,25 +4830,13 @@ impl World {
                 &CRemoveActor::new(VarLong(entity_id as i64)),
             );
 
-            if fire_event {
-                let msg_comp = TextComponent::translate_cross(
-                    translation::java::MULTIPLAYER_PLAYER_LEFT,
-                    translation::bedrock::MULTIPLAYER_PLAYER_LEFT,
-                    [TextComponent::text(player.gameprofile.name.clone())],
-                )
-                .color_named(NamedColor::Yellow);
-                let mut event = PlayerLeaveEvent::new(player.clone(), msg_comp);
-
-                if let Some(server) = self.server.upgrade() {
-                    server.plugin_manager.fire(&server, &mut event).await;
-
-                    if !event.cancelled {
-                        for player in self.players.load().iter() {
-                            player.send_system_message(&event.leave_message);
-                        }
-                        info!("{}", event.leave_message.to_pretty_console());
-                    }
+            if let Some(event) = leave_event
+                && !event.cancelled
+            {
+                for player in self.players.load().iter() {
+                    player.send_system_message(&event.leave_message);
                 }
+                info!("{}", event.leave_message.to_pretty_console());
             }
         }
         removed_player
