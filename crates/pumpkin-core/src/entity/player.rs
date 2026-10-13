@@ -269,12 +269,12 @@ use pumpkin_protocol::java::client::play::{
     CCloseContainer, CCombatDeath, CCustomPayload, CDisguisedChatMessage, CEntityAnimation,
     CEntityPositionSync, CEntityVelocity, CGameEvent, CHurtAnimation, CItemCooldown, CMapItemData,
     COpenBook, COpenScreen, COpenSignEditor, CParticle, CPlayServerLinks, CPlayerAbilities,
-    CPlayerInfoUpdate, CPlayerPosition, CPlayerSpawnPosition, CRespawn, CSetCamera,
-    CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem, CSetExperience,
-    CSetHealth, CSetPlayerInventory, CSetSelectedSlot, CSoundEffect, CStopSound, CSubtitle,
-    CSystemChatMessage, CTabList, CTitleAnimation, CTitleText, CUnloadChunk, CUpdateMobEffect,
-    CUpdateTime, GameEvent, MapIcon, MapPatch, PlayerAction, PlayerInfoFlags, PlayerSpawnData,
-    PreviousMessage, Statistic,
+    CPlayerInfoUpdate, CPlayerPosition, CPlayerSpawnPosition, CRemovePlayerInfo, CRespawn,
+    CSetCamera, CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem,
+    CSetExperience, CSetHealth, CSetPlayerInventory, CSetSelectedSlot, CSoundEffect, CStopSound,
+    CSubtitle, CSystemChatMessage, CTabList, CTitleAnimation, CTitleText, CUnloadChunk,
+    CUpdateMobEffect, CUpdateTime, GameEvent, MapIcon, MapPatch, PlayerAction, PlayerInfoFlags,
+    PlayerSpawnData, PreviousMessage, Statistic,
 };
 use pumpkin_protocol::java::server::play::{
     SClickSlot, SContainerButtonClick, SRenameItem, SlotActionType,
@@ -3854,18 +3854,52 @@ impl Player {
         self.respawn_location.load()
     }
 
+    /// Bukkit `hidePlayer`: the other player leaves this player's view and tab list
+    /// until shown again, even across their rejoins (not this player's).
     pub fn hide_player(&self, other_id: uuid::Uuid) {
-        self.hidden_players
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(other_id);
+        if other_id == self.gameprofile.id
+            || !self
+                .hidden_players
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(other_id)
+        {
+            return;
+        }
+        let world = self.world();
+        let Some(other) = world.get_player_by_uuid(other_id) else {
+            return;
+        };
+        if let Some(tracked) = world.entity_tracker.get_tracked_entity(other.entity_id()) {
+            tracked.remove_player(self);
+        }
+        self.client.try_enqueue_packet_editioned(
+            &CRemovePlayerInfo::new(&[other_id]),
+            &CPlayerList {
+                action: CPlayerList::ACTION_REMOVE,
+                ..other.bedrock_player_list()
+            },
+        );
     }
 
-    pub fn show_player(&self, other_id: uuid::Uuid) {
-        self.hidden_players
+    /// Bukkit `showPlayer`: undoes [`Self::hide_player`]; the tab entry goes first.
+    pub fn show_player(self: &Arc<Self>, other_id: uuid::Uuid) {
+        if !self
+            .hidden_players
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&other_id);
+            .remove(&other_id)
+        {
+            return;
+        }
+        let world = self.world();
+        let Some(other) = world.get_player_by_uuid(other_id) else {
+            return;
+        };
+        World::send_player_list_entry(&other, self);
+        if let Some(tracked) = world.entity_tracker.get_tracked_entity(other.entity_id()) {
+            tracked.update_player(self, &world);
+        }
     }
 
     pub fn can_see(&self, other_id: &uuid::Uuid) -> bool {

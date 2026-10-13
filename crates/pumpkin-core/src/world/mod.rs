@@ -3452,7 +3452,13 @@ impl World {
         }];
         let player_info_update = CPlayerInfoUpdate::new(Self::TAB_LIST_ADD_FLAGS, &java_player);
 
-        self.broadcast_editioned(&player_info_update, &bedrock_player_list);
+        // Viewers who hid this player (a rejoin) never learn about them.
+        let hidden_from = self.hidden_from(player);
+        self.broadcast_packet_except_editioned(
+            &hidden_from,
+            &player_info_update,
+            &bedrock_player_list,
+        );
 
         // If the player has a custom tab_list_name, send an update for it
         if let Some(tab_list_name) = player.get_tab_list_name() {
@@ -3461,10 +3467,10 @@ impl World {
                 uuid: gameprofile.id,
                 actions: &actions,
             }];
-            self.broadcast_packet_all(&CPlayerInfoUpdate::new(
-                PlayerInfoFlags::UPDATE_DISPLAY_NAME.bits(),
-                &java_player,
-            ));
+            self.broadcast_packet_except(
+                &hidden_from,
+                &CPlayerInfoUpdate::new(PlayerInfoFlags::UPDATE_DISPLAY_NAME.bits(), &java_player),
+            );
         }
 
 
@@ -3488,13 +3494,15 @@ impl World {
             velocity,
         );
 
-        self.broadcast_packet_except(&[player.gameprofile.id], &spawn_entity);
+        let mut except = hidden_from;
+        except.push(player.gameprofile.id);
+        self.broadcast_packet_except(&except, &spawn_entity);
 
         // Broadcast metadata to Java players so they can correctly interact with the new player
         let skin_parts = player.config.load().skin_parts;
 
         self.broadcast_skin_parts(
-            &[gameprofile.id],
+            &except,
             entity_id,
             skin_parts,
             &CSetActorData {
@@ -4667,6 +4675,37 @@ impl World {
     }
 
     /// Tab-list add entry for `player` from its stored state, as Java and Bedrock packets.
+    /// Players in this world who hid `player` from themselves (Bukkit `hidePlayer`).
+    fn hidden_from(&self, player: &Player) -> Vec<uuid::Uuid> {
+        let id = player.gameprofile.id;
+        self.players
+            .load()
+            .iter()
+            .filter(|viewer| !viewer.can_see(&id))
+            .map(|viewer| viewer.gameprofile.id)
+            .collect()
+    }
+
+    /// Sends `player`'s tab-list entry, display name included, to `viewer` alone.
+    pub fn send_player_list_entry(player: &Player, viewer: &Player) {
+        Self::with_player_list_entry(player, |java, bedrock| {
+            viewer.client.try_enqueue_packet_editioned(java, bedrock);
+        });
+        if let Some(tab_list_name) = player.get_tab_list_name()
+            && let ClientPlatform::Java(java) = viewer.client.as_ref()
+        {
+            let actions = [PlayerAction::UpdateDisplayName(Some(&tab_list_name))];
+            let entry = [pumpkin_protocol::java::client::play::Player {
+                uuid: player.gameprofile.id,
+                actions: &actions,
+            }];
+            java.try_send_packet(&CPlayerInfoUpdate::new(
+                PlayerInfoFlags::UPDATE_DISPLAY_NAME.bits(),
+                &entry,
+            ));
+        }
+    }
+
     fn with_player_list_entry<R>(
         player: &Player,
         f: impl FnOnce(&CPlayerInfoUpdate<'_>, &CPlayerList) -> R,
@@ -4697,8 +4736,10 @@ impl World {
     /// Publishes a player from another world -> tab list first, Java drops spawns without it.
     pub fn add_arriving_player(&self, player: &Arc<Player>) {
         let id = player.gameprofile.id;
+        let mut except = self.hidden_from(player);
+        except.push(id);
         Self::with_player_list_entry(player, |java, bedrock| {
-            self.broadcast_packet_except_editioned(&[id], java, bedrock);
+            self.broadcast_packet_except_editioned(&except, java, bedrock);
         });
         for existing in self
             .players
