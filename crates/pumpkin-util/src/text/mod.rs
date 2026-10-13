@@ -899,9 +899,23 @@ impl TextComponentBase {
 }
 
 fn nbt_compound_to_json(compound: &pumpkin_nbt::NbtCompound) -> serde_json::Value {
+    // NBT has no booleans: the style flags arrive as bytes.
+    const FLAGS: [&str; 5] = [
+        "bold",
+        "italic",
+        "underlined",
+        "strikethrough",
+        "obfuscated",
+    ];
     let mut map = serde_json::Map::new();
     for (k, v) in &compound.child_tags {
-        map.insert(k.to_string(), nbt_tag_to_json(v));
+        let value = match v {
+            pumpkin_nbt::tag::NbtTag::Byte(b) if FLAGS.iter().any(|flag| *flag == &**k) => {
+                serde_json::Value::Bool(*b != 0)
+            }
+            _ => nbt_tag_to_json(v),
+        };
+        map.insert(k.to_string(), value);
     }
     serde_json::Value::Object(map)
 }
@@ -2202,6 +2216,18 @@ mod custom_name_nbt_tests {
         let tag = NbtTag::String("Bob".into());
         let component = TextComponent::from_nbt(&tag);
         assert_eq!(component.get_text(), "Bob");
+    }
+
+    #[test]
+    fn styled_text_round_trips_through_nbt() {
+        let component = TextComponent::text("Blade")
+            .color_named(crate::text::color::NamedColor::Red)
+            .bold()
+            .font("rebel:crystal".to_string());
+        let tag = component
+            .0
+            .to_nbt_tag_for_version(&crate::version::JavaMinecraftVersion::V_26_3);
+        assert_eq!(TextComponent::from_nbt(&tag), component);
     }
 
     #[test]
