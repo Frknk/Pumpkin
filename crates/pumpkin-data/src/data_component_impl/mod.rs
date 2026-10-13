@@ -117,12 +117,12 @@ macro_rules! default_impl {
 }
 
 pub fn get_str_hash(val: &str) -> u32 {
+    // Guava `putInt(length).putUnencodedChars(value)`: UTF-16 code units, little-endian.
     let mut digest = Digest::new();
     digest.update(&[12u8]);
-    digest.update(&(val.len() as u32).to_le_bytes());
-    let byte = val.as_bytes();
-    for i in byte {
-        digest.update(&[*i, 0u8]);
+    digest.update(&(val.encode_utf16().count() as u32).to_le_bytes());
+    for unit in val.encode_utf16() {
+        digest.update(&unit.to_le_bytes());
     }
     digest.finalize() as u32
 }
@@ -719,6 +719,11 @@ mod tests {
     #[test]
     fn hash() {
         assert_eq!(get_str_hash("minecraft:sharpness"), 2734053906u32);
+        // Vanilla hashes UTF-16 code units: "mágica ▯" plus a private-use glyph.
+        assert_eq!(
+            get_str_hash("m\u{e1}gica \u{25af}\u{e010}") as i32,
+            -1_526_379_016
+        );
         assert_eq!(get_i32_hash(3), 3795317917u32);
         assert_eq!(
             EnchantmentsImpl {
