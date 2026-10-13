@@ -1,4 +1,5 @@
 use super::{NBTStorage, NBTStorageInit, player::Player};
+use crate::plugin::api::events::entity::food_level_change::FoodLevelChangeEvent;
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::damage::DamageType;
 use pumpkin_nbt::compound::NbtCompound;
@@ -116,12 +117,21 @@ impl HungerManager {
         true
     }
 
+    /// Eating fires `FoodLevelChangeEvent` with the level before clamping, as in
+    /// Bukkit. A cancel changes neither food nor saturation.
     pub fn eat(&self, player: &Player, food: u8, saturation: f32) {
-        let new_level = self.level.load().saturating_add(food).min(MAX_FOOD);
-        let new_sat = (self.saturation.load() + saturation).clamp(0.0, f32::from(new_level));
+        let mut event =
+            FoodLevelChangeEvent::new(player.entity_id(), self.level.load().saturating_add(food));
+        if let Some(server) = player.world().server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        if !event.cancelled {
+            let new_level = event.food_level.min(MAX_FOOD);
+            let new_sat = (self.saturation.load() + saturation).clamp(0.0, f32::from(new_level));
 
-        self.level.store(new_level);
-        self.saturation.store(new_sat);
+            self.level.store(new_level);
+            self.saturation.store(new_sat);
+        }
 
         player.send_health();
     }
