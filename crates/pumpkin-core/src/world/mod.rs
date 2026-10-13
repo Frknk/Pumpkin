@@ -4745,7 +4745,7 @@ impl World {
             .players
             .load()
             .iter()
-            .filter(|p| p.gameprofile.id != id)
+            .filter(|p| p.gameprofile.id != id && player.can_see(&p.gameprofile.id))
         {
             Self::with_player_list_entry(existing, |java, bedrock| {
                 player.client.try_enqueue_packet_editioned(java, bedrock);
