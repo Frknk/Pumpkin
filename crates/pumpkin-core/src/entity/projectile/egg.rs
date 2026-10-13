@@ -6,6 +6,7 @@ use crate::{
     entity::{Entity, EntityBase, projectile::ThrownItemEntity, r#type::from_type},
     server::Server,
 };
+use pumpkin_data::damage::DamageType;
 use pumpkin_data::entity::{EntityStatus, EntityType};
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
@@ -105,6 +106,22 @@ impl EntityBase for EggEntity {
             EntityStatus::Death,
             Some(ActorEventID::Death),
         );
+
+        // Vanilla `onHitEntity`: a harmless hit on behalf of the thrower
+        if let crate::entity::projectile::ProjectileHit::Entity { entity, .. } = &hit {
+            let owner = self
+                .thrown
+                .owner_id
+                .and_then(|id| world.get_entity_by_id(id));
+            entity.damage_with_context(
+                entity.as_ref(),
+                0.0,
+                DamageType::THROWN,
+                Some(hit_pos),
+                owner.as_deref(),
+                None,
+            );
+        }
 
         // Decide spawn count per probabilities:
         // r == 0 -> spawn 4 (1/256)
