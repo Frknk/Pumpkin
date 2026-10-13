@@ -8,6 +8,8 @@ use crate::sound::Sound;
 use crate::tag::Taggable;
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_nbt::tag::NbtTag;
+use pumpkin_util::text::color::Color;
+use pumpkin_util::text::{TextComponentBase, TextContent};
 use std::any::Any;
 use std::borrow::Cow;
 
@@ -125,6 +127,119 @@ pub fn get_str_hash(val: &str) -> u32 {
         digest.update(&unit.to_le_bytes());
     }
     digest.finalize() as u32
+}
+
+pub fn get_bool_hash(val: bool) -> u32 {
+    let mut digest = Digest::new();
+    digest.update(&[13u8, u8::from(val)]);
+    digest.finalize() as u32
+}
+
+pub fn get_list_hash(hashes: impl IntoIterator<Item = u32>) -> u32 {
+    let mut digest = Digest::new();
+    digest.update(&[4u8]);
+    for hash in hashes {
+        digest.update(&hash.to_le_bytes());
+    }
+    digest.update(&[5u8]);
+    digest.finalize() as u32
+}
+
+/// Vanilla `HashOps` map: entries sorted by key hash, then value hash.
+pub fn get_map_hash(mut entries: Vec<(u32, u32)>) -> u32 {
+    entries.sort_unstable();
+    let mut digest = Digest::new();
+    digest.update(&[2u8]);
+    for (key, value) in entries {
+        digest.update(&key.to_le_bytes());
+        digest.update(&value.to_le_bytes());
+    }
+    digest.update(&[3u8]);
+    digest.finalize() as u32
+}
+
+/// Vanilla `HashOps` over `ComponentSerialization.CODEC`, for the component as sent: a plain
+/// text component is a string, anything else a map of its content, style and `extra`.
+/// Click and hover events are not hashed, so a component with one never matches.
+#[must_use]
+pub fn get_text_component_hash(component: &TextComponentBase) -> u32 {
+    if component.style.is_empty()
+        && component.extra.is_empty()
+        && let TextContent::Text { text } = &*component.content
+    {
+        return get_str_hash(text);
+    }
+    let mut entries = Vec::new();
+    let mut put = |key: &str, value: u32| entries.push((get_str_hash(key), value));
+    match &*component.content {
+        TextContent::Text { text } => put("text", get_str_hash(text)),
+        TextContent::Translate {
+            translate: key,
+            with,
+            ..
+        }
+        | TextContent::Custom { key, with, .. } => {
+            put("translate", get_str_hash(key));
+            if !with.is_empty() {
+                put(
+                    "with",
+                    get_list_hash(with.iter().map(get_text_component_hash)),
+                );
+            }
+        }
+        TextContent::Keybind { keybind } => put("keybind", get_str_hash(keybind)),
+        TextContent::EntityNames {
+            selector,
+            separator,
+        } => {
+            put("selector", get_str_hash(selector));
+            if let Some(separator) = separator {
+                put("separator", get_str_hash(separator));
+            }
+        }
+        TextContent::PlayerSprite { .. } => return 0,
+    }
+    let style = &component.style;
+    if let Some(color) = &style.color {
+        let color = match color {
+            Color::Reset => "reset".to_owned(),
+            Color::Named(named) => named.name().to_owned(),
+            Color::Rgb(rgb) => format!("#{:02X}{:02X}{:02X}", rgb.red, rgb.green, rgb.blue),
+        };
+        put("color", get_str_hash(&color));
+    }
+    if let Some(shadow) = &style.shadow_color {
+        put("shadow_color", get_i32_hash(shadow.to_argb_int()));
+    }
+    for (key, flag) in [
+        ("bold", style.bold),
+        ("italic", style.italic),
+        ("underlined", style.underlined),
+        ("strikethrough", style.strikethrough),
+        ("obfuscated", style.obfuscated),
+    ] {
+        if let Some(flag) = flag {
+            put(key, get_bool_hash(flag));
+        }
+    }
+    if let Some(insertion) = &style.insertion {
+        put("insertion", get_str_hash(insertion));
+    }
+    if let Some(font) = &style.font {
+        // The client reads it as an identifier, which carries the default namespace.
+        if font.contains(':') {
+            put("font", get_str_hash(font));
+        } else {
+            put("font", get_str_hash(&format!("minecraft:{font}")));
+        }
+    }
+    if !component.extra.is_empty() {
+        put(
+            "extra",
+            get_list_hash(component.extra.iter().map(get_text_component_hash)),
+        );
+    }
+    get_map_hash(entries)
 }
 
 pub fn get_i32_hash(val: i32) -> u32 {
@@ -736,12 +851,105 @@ mod tests {
         assert_eq!(MapIdImpl { id: 10 }.get_hash(), -919192125i32);
     }
 
+    /// Expected values from vanilla 26.3: `ComponentSerialization.CODEC` encoded with
+    /// `HashOps.CRC32C_INSTANCE`.
+    #[test]
+    #[allow(deprecated)]
+    fn text_component_hash() {
+        use pumpkin_util::text::TextComponent;
+        use pumpkin_util::text::color::{ARGBColor, NamedColor, RGBColor};
+
+        let hash = |c: TextComponent| get_text_component_hash(&c.0) as i32;
+        let gold_lore = || {
+            let mut c = TextComponent::text("Gold lore").color_named(NamedColor::Gold);
+            c.0.style.italic = Some(false);
+            c
+        };
+        assert_eq!(hash(TextComponent::text("Probe Blade")), -1_554_045_002);
+        assert_eq!(
+            hash(
+                TextComponent::text("Probe Blade")
+                    .color_named(NamedColor::Red)
+                    .bold()
+            ),
+            -150_795_075
+        );
+        assert_eq!(hash(gold_lore()), -243_886_540);
+        assert_eq!(
+            hash(
+                TextComponent::text("x")
+                    .color_rgb(RGBColor::new(0xFF, 0x88, 0x00))
+                    .font("rebel:crystal".to_string())
+            ),
+            997_544_185
+        );
+        assert_eq!(
+            hash(
+                TextComponent::text("")
+                    .add_child(TextComponent::text("a").color_named(NamedColor::Red))
+                    .add_child(TextComponent::text("b"))
+            ),
+            -1_597_190_610
+        );
+        assert_eq!(
+            hash(
+                TextComponent::translate("item.minecraft.diamond", [])
+                    .color_named(NamedColor::Aqua)
+            ),
+            -1_124_089_826
+        );
+        assert_eq!(
+            hash(TextComponent::translate(
+                "chat.type.text",
+                [
+                    TextComponent::text("Bob"),
+                    TextComponent::text("hi").color_named(NamedColor::Gray),
+                ]
+            )),
+            1_536_164_838
+        );
+        assert_eq!(
+            hash(TextComponent::text("s").shadow_color(ARGBColor::new(0x80, 0xFF, 0, 0))),
+            -185_223_544
+        );
+        assert_eq!(
+            LoreImpl {
+                lines: vec![gold_lore(), TextComponent::text("two")],
+            }
+            .get_hash(),
+            536_860_437
+        );
+    }
+
     fn assert_round_trip<T: DataComponentImpl + Clone + 'static>(
         value: T,
         read: impl Fn(&NbtTag) -> Option<T>,
     ) {
         let restored = read(&value.write_data()).expect("read_data returned None");
         assert!(value.equal(&restored));
+    }
+
+    #[test]
+    fn styled_name_and_lore_round_trip() {
+        use pumpkin_util::text::TextComponent;
+        use pumpkin_util::text::color::NamedColor;
+
+        let styled = TextComponent::text("Probe Blade")
+            .color_named(NamedColor::Red)
+            .bold()
+            .font("rebel:crystal".to_string());
+        assert_round_trip(
+            CustomNameImpl {
+                name: styled.clone(),
+            },
+            CustomNameImpl::read_data,
+        );
+        assert_round_trip(
+            LoreImpl {
+                lines: vec![styled, TextComponent::text("plain")],
+            },
+            LoreImpl::read_data,
+        );
     }
 
     #[test]

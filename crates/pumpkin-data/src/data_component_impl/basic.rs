@@ -1,7 +1,10 @@
-use crate::data_component_impl::{DataComponentImpl, get_i32_hash, get_str_hash};
+use crate::data_component_impl::{
+    DataComponentImpl, get_i32_hash, get_list_hash, get_str_hash, get_text_component_hash,
+};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_nbt::tag::NbtTag;
 use pumpkin_util::text::TextComponent;
+use pumpkin_util::version::JavaMinecraftVersion;
 use std::borrow::Cow;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -109,17 +112,18 @@ pub struct CustomNameImpl {
 }
 impl CustomNameImpl {
     pub fn read_data(data: &NbtTag) -> Option<Self> {
-        data.extract_string().map(|name| Self {
-            name: TextComponent::text(name.to_string()),
+        Some(Self {
+            name: TextComponent::from_nbt(data),
         })
     }
 }
 impl DataComponentImpl for CustomNameImpl {
     fn write_data(&self) -> NbtTag {
-        NbtTag::String(self.name.clone().get_text().into())
+        self.name
+            .to_nbt_tag_for_version(&JavaMinecraftVersion::V_26_3)
     }
     fn get_hash(&self) -> i32 {
-        get_str_hash(self.name.clone().get_text().as_str()) as i32
+        get_text_component_hash(&self.name.0.clone().to_translated()) as i32
     }
     default_impl!(CustomName);
 }
@@ -187,11 +191,7 @@ impl LoreImpl {
         };
 
         Some(Self {
-            lines: lines
-                .iter()
-                .filter_map(NbtTag::extract_string)
-                .map(|line| TextComponent::text(line.to_owned()))
-                .collect(),
+            lines: lines.iter().map(TextComponent::from_nbt).collect(),
         })
     }
 }
@@ -200,9 +200,16 @@ impl DataComponentImpl for LoreImpl {
         NbtTag::List(
             self.lines
                 .iter()
-                .map(|line| NbtTag::String(line.clone().get_text().into_boxed_str()))
+                .map(|line| line.to_nbt_tag_for_version(&JavaMinecraftVersion::V_26_3))
                 .collect(),
         )
+    }
+    fn get_hash(&self) -> i32 {
+        get_list_hash(
+            self.lines
+                .iter()
+                .map(|line| get_text_component_hash(&line.0.clone().to_translated())),
+        ) as i32
     }
     default_impl!(Lore);
 }
