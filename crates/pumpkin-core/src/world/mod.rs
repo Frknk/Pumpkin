@@ -1628,6 +1628,14 @@ impl World {
                             && (player_pos.y - entity_pos.y).abs() < 5.0
                             && (player_pos.z - entity_pos.z).abs() < 5.0
                             && player_bb.intersects(&entity_bb)
+                            // The cache is from the start of the tick: a player who respawned
+                            // or teleported since must not touch what lies where they were.
+                            && player
+                                .get_entity()
+                                .bounding_box
+                                .load()
+                                .expand(1.0, 0.5, 1.0)
+                                .intersects(&entity_bb)
                         {
                             entity.on_player_collision(player);
                             break;
@@ -4167,6 +4175,14 @@ impl World {
             )
             .await;
 
+        // Set entity position BEFORE loading chunks, so chunks load at the right location
+        // This mirrors the initial spawn flow where update_position is called before teleport
+        // It also comes before the revival, so the player is never alive where they died
+        // (where they would pick up their own drops).
+        player.get_entity().set_pos(position);
+        player.get_entity().set_rotation(yaw, pitch);
+        player.get_entity().last_pos.store(position);
+
         player.living_entity.reset_state();
 
         player.send_permission_lvl_update();
@@ -4177,12 +4193,6 @@ impl World {
             player.set_experience(0, 0.0, 0);
             player.inventory.clear();
         }
-
-        // Set entity position BEFORE loading chunks, so chunks load at the right location
-        // This mirrors the initial spawn flow where update_position is called before teleport
-        player.get_entity().set_pos(position);
-        player.get_entity().set_rotation(yaw, pitch);
-        player.get_entity().last_pos.store(position);
 
         // TODO: difficulty, exp bar, status effect
 
