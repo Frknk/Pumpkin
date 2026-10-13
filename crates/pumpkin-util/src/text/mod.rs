@@ -910,7 +910,7 @@ fn nbt_compound_to_json(compound: &pumpkin_nbt::NbtCompound) -> serde_json::Valu
     let mut map = serde_json::Map::new();
     for (k, v) in &compound.child_tags {
         let value = match v {
-            pumpkin_nbt::tag::NbtTag::Byte(b) if FLAGS.iter().any(|flag| *flag == &**k) => {
+            pumpkin_nbt::tag::NbtTag::Byte(b) if FLAGS.contains(&&**k) => {
                 serde_json::Value::Bool(*b != 0)
             }
             _ => nbt_tag_to_json(v),
