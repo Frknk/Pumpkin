@@ -5299,7 +5299,7 @@ impl World {
                 killed_by_player: Some(cause.is_some()),
                 ..Default::default()
             };
-            crate::block::drop_loot(self, broken_block, position, true, &params);
+            crate::block::drop_loot(self, broken_block, position, true, &params, cause);
         }
 
         let new_state_id = if broken_block.is_waterlogged(broken_block_state.id) {

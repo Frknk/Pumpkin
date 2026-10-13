@@ -452,12 +452,14 @@ pub struct BlockEvent {
     pub data: u8,
 }
 
+/// Drops the block's loot at `pos`. `player` is whoever broke it, for plugins.
 pub fn drop_loot(
     world: &Arc<World>,
     block: &Block,
     pos: &BlockPos,
     experience: bool,
     params: &LootContextParameters,
+    player: Option<&Arc<Player>>,
 ) {
     let key = format!("minecraft:blocks/{}", block.name);
     if let Some(loot_table) = world.get_loot_table(&key) {
@@ -467,7 +469,7 @@ pub fn drop_loot(
             let mut event = crate::plugin::block::block_drop_item::BlockDropItemEvent {
                 block_pos: *pos,
                 world: world.clone(),
-                player: None,
+                player: player.cloned(),
                 items,
                 cancelled: false,
             };

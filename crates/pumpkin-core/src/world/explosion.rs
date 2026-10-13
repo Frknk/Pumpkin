@@ -555,7 +555,7 @@ impl Explosion {
                             is_thundering: Some(is_thundering),
                             ..Default::default()
                         };
-                        drop_loot(world, block, pos, false, &params);
+                        drop_loot(world, block, pos, false, &params, None);
                     }
 
                     world.set_block_state(pos, BlockStateId::AIR, BlockFlags::NOTIFY_ALL);
